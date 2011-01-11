@@ -49,13 +49,10 @@ def check_host_port(host, port):
 
   return False
 
-def check_blacklist(host, port, path):
-  """
-  Return true if this host:port path combo is allowed to be proxied.
-  """
-  blacklist = conf.BLACKLIST.get()
-  if not blacklist:
-    return True
+def check_host_port_path(regex_list, host, port, path):
+  """Return True iff any regex matches the host port path combo."""
+  if not regex_list:
+    return False
 
   # Make a canonical path, since "/forbidden//path" (string) does not match
   # "/forbidden/path" (regex).
@@ -66,10 +63,16 @@ def check_blacklist(host, port, path):
   if has_trailing_slash:
     canon_url += '/'
 
-  for regexp in blacklist:
+  for regexp in regex_list:
     if regexp.match(canon_url):
-      return False
-  return True
+      return True
+  return False
+
+def check_blacklist(host, port, path):
+  """
+  Return true if this host:port path combo is allowed to be proxied.
+  """
+  return not check_host_port_path(conf.BLACKLIST.get(), host, port, path)
 
 
 def proxy(request, host, port, path):
@@ -87,15 +90,22 @@ def proxy(request, host, port, path):
     raise MessageException(
       "Access to %s:%s%s is blocked. Contact your administrator." % (host, port, path))
 
+  strip_params = check_host_port_path(conf.PARAM_BLACKLIST.get(),
+                                      host, port, path)
+  if strip_params:
+    params = None
+  else:
+    params = request.META.get("QUERY_STRING")
+
   # The tuple here is: (scheme, netloc, path, params, query, fragment).
   # We don't support params or fragment.
   url = urlunparse(("http", "%s:%d" % (host,port), 
                     path, 
                     None, 
-                    request.META.get("QUERY_STRING"), 
+                    params,
                     None))
   LOGGER.info("Retrieving %s." % url)
-  if request.method == 'POST':
+  if request.method == 'POST' and not strip_params:
     post_data = request.POST.urlencode()
   else:
     post_data = None

@@ -21,12 +21,15 @@ import threading
 import BaseHTTPServer
 import StringIO
 
-from nose.tools import assert_true, assert_false
+from nose.tools import assert_true, assert_false, assert_equal
 from django.test.client import Client
 from desktop.lib.django_test_util import make_logged_in_client
 
 from proxy.views import _rewrite_links
 import proxy.conf
+
+# This holds the last HTTP request handler
+_request_handler = None
 
 class Handler(BaseHTTPServer.BaseHTTPRequestHandler):
   """
@@ -34,6 +37,8 @@ class Handler(BaseHTTPServer.BaseHTTPRequestHandler):
   that does very little, and test proxying against it.
   """
   def do_GET(self):
+    global _request_handler
+    _request_handler = self
     self.send_response(200)
     self.send_header("Content-type", "text/html; charset=utf8")
     self.end_headers()
@@ -43,6 +48,8 @@ class Handler(BaseHTTPServer.BaseHTTPRequestHandler):
     self.wfile.write("Link: <a href='/baz?with=parameter'>link</a>")
 
   def do_POST(self):
+    global _request_handler
+    _request_handler = self
     self.send_response(200)
     self.send_header("Content-type", "text/html; charset=utf8")
     self.end_headers()
@@ -56,6 +63,10 @@ def run_test_server():
   """
   Returns the server, and a method to close it out.
   """
+  # Clear the global _request_handler
+  global _request_handler
+  _request_handler = None
+
   # We need to proxy a server, so we go ahead and create one.
   httpd = BaseHTTPServer.HTTPServer(("127.0.0.1", 0), Handler)
   # Spawn a thread that serves exactly one request.
@@ -132,6 +143,47 @@ def test_blacklist():
     try:
       resp = client.get('/proxy/localhost/%s//foo//fred_ok' % (httpd.server_port,))
       assert_true("Hello there" in resp.content)
+    finally:
+      finish()
+  finally:
+    for fin in finish_confs:
+      fin()
+
+def test_param_blacklist():
+  client = make_logged_in_client('test')
+  finish_confs = [
+    proxy.conf.WHITELIST.set_for_testing(r"localhost:\d*"),
+    proxy.conf.PARAM_BLACKLIST.set_for_testing(r"localhost:\d*/ban"),
+  ]
+  try:
+    # Request 1: Not on the param blacklist
+    httpd, finish = run_test_server()
+    try:
+      resp = client.get('/proxy/localhost/%s/ok?abc' % (httpd.server_port,))
+      assert_true("Hello there" in resp.content)
+      assert_equal(_request_handler.command, 'GET')
+      assert_equal(_request_handler.path, '/ok?abc')
+    finally:
+      finish()
+
+    # Request 2: Blacklist -- Stripped GET param
+    httpd, finish = run_test_server()
+    try:
+      resp = client.get('/proxy/localhost/%s/ban?abc' % (httpd.server_port,))
+      assert_true("Hello there" in resp.content)
+      assert_equal(_request_handler.command, 'GET')
+      assert_equal(_request_handler.path, '/ban')
+    finally:
+      finish()
+
+    # Request 3: Blacklist -- POST -> GET without param
+    httpd, finish = run_test_server()
+    try:
+      resp = client.post('/proxy/localhost/%s/ban' % (httpd.server_port,),
+                         {'foo': 'bar'})
+      assert_true("Hello there" in resp.content)
+      assert_equal(_request_handler.command, 'GET')
+      assert_equal(_request_handler.path, '/ban')
     finally:
       finish()
   finally:

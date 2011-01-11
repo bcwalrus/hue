@@ -37,3 +37,9 @@ BLACKLIST = Config(
   default=(),
   help="Comma-separated list of regular expressions, which match any prefix of 'host:port/path' of requested proxy target. This does not support matching GET parameters.",
   type=list_of_compiled_res)
+
+PARAM_BLACKLIST = Config(
+  key="param_blacklist",
+  default=(),
+  help="Comma-separated list of regular expressions, which match any prefix of 'host:port/path' of requested proxy target. GET/POST parameters will be stripped from the proxied request.",
+  type=list_of_compiled_res)
